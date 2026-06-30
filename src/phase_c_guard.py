@@ -85,7 +85,13 @@ def setup_nemo_rails():
         rails.co    — Colang dialogue flows (topic check, jailbreak check, output check)
     """
     from nemoguardrails import RailsConfig, LLMRails
+    from config import JUDGE_MODEL
     config = RailsConfig.from_path(GUARDRAILS_CONFIG_DIR)
+    
+    # Force use the model configured in .env / config.py
+    if config.models:
+        config.models[0].model = JUDGE_MODEL
+        
     rails  = LLMRails(config)
     return rails
 
