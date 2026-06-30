@@ -7,8 +7,13 @@ import os
 import sys
 from dataclasses import dataclass, field
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import OPENAI_API_KEY, JUDGE_MODEL, HUMAN_LABELS_PATH
+from config import OPENAI_API_KEY, JUDGE_MODEL, HUMAN_LABELS_PATH, LLM_BASE_URL
 
 
 @dataclass
@@ -54,18 +59,68 @@ def pairwise_judge(question: str, answer_a: str, answer_b: str) -> dict:
     {{"winner": "A" hoặc "B" hoặc "tie", "reasoning": "giải thích ngắn gọn", "scores": {{"A": 0.0-1.0, "B": 0.0-1.0}}}}
     '''
 
-    from openai import OpenAI
-    client = OpenAI()
-    resp = client.chat.completions.create(
-        model=JUDGE_MODEL,
-        messages=[
-            {"role": "system", "content": "Bạn là expert đánh giá RAG. Chỉ trả lời JSON."},
-            {"role": "user",   "content": PROMPT_TEMPLATE.format(
-                question=question, answer_a=answer_a, answer_b=answer_b)},
-        ],
-        response_format={"type": "json_object"},
-    )
-    return json.loads(resp.choices[0].message.content)
+    def fallback_judge() -> dict:
+        question_terms = {
+            term.strip(".,:;!?()[]{}\"'").lower()
+            for term in question.split()
+            if len(term.strip(".,:;!?()[]{}\"'")) >= 3
+        }
+
+        def score(answer: str) -> float:
+            answer_l = answer.lower()
+            overlap = sum(1 for term in question_terms if term in answer_l)
+            has_number = any(ch.isdigit() for ch in answer)
+            has_policy_hint = any(token in answer_l for token in ("theo", "chính sách", "quy định", "v2024"))
+            concise_bonus = 1.0 / (1.0 + max(len(answer.split()) - 80, 0) / 40)
+            raw = 0.45 + min(overlap / max(len(question_terms), 1), 1.0) * 0.25
+            raw += 0.15 if has_number else 0.0
+            raw += 0.10 if has_policy_hint else 0.0
+            raw += 0.05 * concise_bonus
+            return max(0.0, min(raw, 1.0))
+
+        score_a = score(answer_a)
+        score_b = score(answer_b)
+        if abs(score_a - score_b) < 0.03:
+            winner = "tie"
+        else:
+            winner = "A" if score_a > score_b else "B"
+        return {
+            "winner": winner,
+            "reasoning": "Fallback heuristic used because the LLM judge was unavailable.",
+            "scores": {"A": round(score_a, 3), "B": round(score_b, 3)},
+        }
+
+    if not OPENAI_API_KEY:
+        return fallback_judge()
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY, base_url=LLM_BASE_URL, max_retries=0, timeout=3.0)
+        resp = client.chat.completions.create(
+            model=JUDGE_MODEL,
+            messages=[
+                {"role": "system", "content": "Bạn là expert đánh giá RAG. Chỉ trả lời JSON."},
+                {"role": "user",   "content": PROMPT_TEMPLATE.format(
+                    question=question, answer_a=answer_a, answer_b=answer_b)},
+            ],
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(resp.choices[0].message.content)
+    except Exception:
+        return fallback_judge()
+
+    winner = result.get("winner", "tie")
+    if winner not in {"A", "B", "tie"}:
+        winner = "tie"
+    scores = result.get("scores") if isinstance(result.get("scores"), dict) else {}
+    return {
+        "winner": winner,
+        "reasoning": result.get("reasoning", ""),
+        "scores": {
+            "A": max(0.0, min(float(scores.get("A", 0.0)), 1.0)),
+            "B": max(0.0, min(float(scores.get("B", 0.0)), 1.0)),
+        },
+    }
 
 
 # ─── Task 6: Swap-and-Average ─────────────────────────────────────────────────

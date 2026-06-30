@@ -7,6 +7,7 @@ load_dotenv()
 
 # --- API Keys ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL") or None
 HF_TOKEN = os.getenv("HF_TOKEN", "")  # Optional: for HuggingFace models
 
 # --- Qdrant (same as Day 18) ---
@@ -39,6 +40,13 @@ GUARDRAILS_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "guardrails")
 
 # --- LLM Judge ---
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "qwen3-vl-flash")
+
+# --- Backward-compatible Day 18 aliases ---
+# Copied Day 18 modules import these names. Map them to the current .env
+# contract so setup_answers.py, M4, and M5 do not fail on import.
+ALIBABA_API_KEY = os.getenv("ALIBABA_API_KEY") or OPENAI_API_KEY
+LLM_BASE_URL = os.getenv("LLM_BASE_URL") or OPENAI_BASE_URL
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME") or JUDGE_MODEL
 
 # --- Guardrail latency budget ---
 LATENCY_BUDGET_P95_MS = 500  # target: full guard stack P95 < 500ms
